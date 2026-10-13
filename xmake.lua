@@ -35,8 +35,9 @@ target("agentswitch")
     add_packages("duckdb-bin", "ftxui", "nlohmann_json")
     add_syslinks("curl", "pthread")
 
-    -- libduckdb.so is shipped next to the executable
-    add_ldflags("-Wl,-rpath,$ORIGIN", {force = true})
+    -- libduckdb.so is found next to the executable (build dir) or in ../lib
+    -- (installed layout: <prefix>/bin/agentswitch, <prefix>/lib/libduckdb.so)
+    add_ldflags("-Wl,-rpath,$ORIGIN:$ORIGIN/../lib", {force = true})
     after_build(function (target)
         local pkg = target:pkg("duckdb-bin")
         if pkg then
@@ -47,5 +48,13 @@ target("agentswitch")
                     break
                 end
             end
+        end
+    end)
+
+    after_install(function (target)
+        local so = path.join(target:targetdir(), "libduckdb.so")
+        if os.isfile(so) then
+            os.mkdir(path.join(target:installdir(), "lib"))
+            os.cp(so, path.join(target:installdir(), "lib"))
         end
     end)

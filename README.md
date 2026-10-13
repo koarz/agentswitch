@@ -110,7 +110,15 @@ xmake            # 首次构建会下载 FTXUI、nlohmann_json 和预编译的 l
 xmake run
 ```
 
-构建产物是 `build/linux/x86_64/release/agentswitch`，旁边还有 `libduckdb.so`（可执行文件通过 `$ORIGIN` 找到它）。想把它装到别处，请把两个文件放在同一目录。
+构建产物是 `build/linux/x86_64/release/agentswitch`，旁边还有 `libduckdb.so`。
+
+安装到本机（可执行文件放进 `<prefix>/bin`，动态库放进 `<prefix>/lib`）：
+
+```bash
+xmake install -y -o ~/.local     # 之后直接运行 agentswitch，需要 ~/.local/bin 在 PATH 里
+```
+
+可执行文件通过 rpath（`$ORIGIN` 和 `$ORIGIN/../lib`）找到 `libduckdb.so`，手动拷贝时请保持 `bin/` 和 `lib/` 的相对位置，或者把两个文件放在同一目录。
 
 ## 使用
 
