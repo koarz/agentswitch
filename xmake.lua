@@ -58,3 +58,17 @@ target("agentswitch")
             os.cp(so, path.join(target:installdir(), "lib"))
         end
     end)
+
+target("switcher_test")
+    set_kind("binary")
+    set_default(false)
+    add_files("tests/switcher_test.cpp", "src/util.cpp")
+    -- Redirect only the switcher's paths into test fixtures. The user's
+    -- environment and real Claude / Codex configuration are never changed.
+    add_files("src/switcher.cpp", {defines = {
+        "claude_dir=test_claude_dir",
+        "codex_dir=test_codex_dir",
+        "config_dir=test_config_dir"
+    }})
+    add_includedirs("src")
+    add_packages("nlohmann_json")

@@ -128,7 +128,7 @@ Element render_footer(int mode, const std::string& toast, bool toast_err) {
     if (mode == 0) {
         l = {key_hint("↑↓", "选择"), key_hint("Enter", "切换"), key_hint("Tab", "换栏"),
              key_hint("a", "添加"),  key_hint("e", "编辑"),    key_hint("d", "删除"),
-             key_hint("i", "导入当前")};
+             key_hint("m", "选模型"), key_hint("i", "导入当前")};
     } else if (mode == 1) {
         l = {key_hint("Tab", "全部/Claude/Codex"), key_hint("←→", "周期"), key_hint("↑↓", "选模型"),
              key_hint("Enter", "每日用量"), key_hint("r", "刷新"), key_hint("1/2", "页面")};
@@ -154,22 +154,46 @@ struct RowView {
     std::string sub;
     bool active = false;
     bool external = false;
+    std::string model;
 };
+
+std::string model_label(const std::string& id, const std::vector<ModelOption>& models) {
+    std::string label = id;
+    for (const auto& m : models) {
+        if (m.id == id && m.name != m.id) {
+            label = m.name + " → " + m.id;
+            break;
+        }
+    }
+    if (models.size() > 1) label += "  ·  " + std::to_string(models.size()) + " 个模型";
+    return label;
+}
+
+std::string format_models(const std::vector<ModelOption>& models) {
+    std::string out;
+    for (const auto& m : models) {
+        if (!out.empty()) out += ", ";
+        out += m.name == m.id ? m.id : m.name + "=" + m.id;
+    }
+    return out;
+}
 
 std::vector<RowView> claude_rows(const claude::State& st) {
     std::vector<RowView> rows;
     rows.push_back({"官方登录", "不覆盖 ANTHROPIC_BASE_URL，使用 Claude 自己的账号",
-                    !st.active.has_override, false});
+                    !st.active.has_override, false,
+                    !st.active.has_override ? st.active.model : ""});
     for (size_t i = 0; i < st.profiles.size(); ++i) {
         const auto& p = st.profiles[i];
-        rows.push_back({p.name, url_host(p.base_url) + "  ·  " + mask_secret(p.token),
-                        static_cast<int>(i) == st.active_index, false});
+        const bool on = static_cast<int>(i) == st.active_index;
+        rows.push_back({p.name, url_host(p.base_url) + "  ·  " + mask_secret(p.token), on, false,
+                        model_label(on ? st.active.model : p.model, p.models)});
     }
     if (st.active.has_override && st.active_index < 0) {
         rows.push_back({"外部配置 (未保存)",
                         url_host(st.active.base_url) + "  ·  " + mask_secret(st.active.token) +
                             "  ·  按 i 保存",
-                        true, true});
+                        true, true, st.active.model});
     }
     return rows;
 }
@@ -177,7 +201,7 @@ std::vector<RowView> claude_rows(const claude::State& st) {
 std::vector<RowView> codex_rows(const codex::State& st) {
     std::vector<RowView> rows;
     rows.push_back({"OpenAI 默认", "官方登录 / OPENAI_API_KEY，不指定 model_provider",
-                    st.active_id.empty(), false});
+                    st.active_id.empty(), false, st.active_id.empty() ? st.active_model : ""});
     bool found = false;
     for (const auto& p : st.providers) {
         bool on = p.id == st.active_id;
@@ -186,10 +210,12 @@ std::vector<RowView> codex_rows(const codex::State& st) {
                              : !p.env_key.empty() ? "env:" + p.env_key
                                                   : "—";
         std::string title = p.name == p.id ? p.id : p.name + "  (" + p.id + ")";
-        rows.push_back({title, url_host(p.base_url) + "  ·  " + secret, on, false});
+        std::string model = model_label(on ? st.active_model : p.model, p.models);
+        rows.push_back({title, url_host(p.base_url) + "  ·  " + secret, on, false, model});
     }
     if (!st.active_id.empty() && !found) {
-        rows.push_back({"外部 provider: " + st.active_id, "config.toml 中没有对应的表", true, true});
+        rows.push_back({"外部 provider: " + st.active_id, "config.toml 中没有对应的表", true, true,
+                        st.active_model});
     }
     return rows;
 }
@@ -205,22 +231,29 @@ Element render_row(const RowView& r, bool selected, bool panel_focused, Color c)
     }
     Element l2 = hbox({text(selected ? "▌" : " ") | color(bar), text("    "),
                        text(r.sub) | color(kDim)});
-    Element e = vbox({hbox(std::move(l1)), l2, text("")});
-    if (selected) e = e | bgcolor(kSelBg);
+    Elements lines = {hbox(std::move(l1)), l2};
+    if (!r.model.empty())
+        lines.push_back(hbox({text(selected ? "▌" : " ") | color(bar), text("    模型: ") | color(kDim),
+                              text(r.model) | color(c)}));
+    lines.push_back(text(""));
+    Element e = vbox(std::move(lines));
+    if (selected) e = e | bgcolor(kSelBg) | focus;
     return e;
 }
 
 Element render_panel(const std::string& icon, const std::string& title, const std::string& path,
                      Color c, const std::vector<RowView>& rows, int sel, bool focused) {
     Elements body;
-    body.push_back(hbox({text(" " + icon + " ") | color(c) | bold, text(title) | bold | color(c),
-                         filler(), text(path + " ") | color(kDim)}));
-    body.push_back(separatorLight() | color(kDim));
     for (size_t i = 0; i < rows.size(); ++i) {
         body.push_back(render_row(rows[i], static_cast<int>(i) == sel, focused, c));
     }
     body.push_back(filler());
-    Element panel = vbox(std::move(body));
+    Element panel = vbox({
+        hbox({text(" " + icon + " ") | color(c) | bold, text(title) | bold | color(c),
+              filler(), text(path + " ") | color(kDim)}),
+        separatorLight() | color(kDim),
+        vbox(std::move(body)) | vscroll_indicator | yframe | flex,
+    });
     return panel | borderStyled(focused ? HEAVY : ROUNDED, focused ? c : kDim) | flex;
 }
 
@@ -240,7 +273,7 @@ Element render_switch(const SwitchView& v) {
     Element right = v.codex.file_exists
                         ? render_panel("◈", "Codex", xpath, kCodex, xr, v.sel[1], v.col == 1)
                         : render_panel("◈", "Codex", xpath, kCodex,
-                                       {{"未找到 config.toml", "先运行一次 codex 以生成配置", false, true}},
+                                       {{"未找到 config.toml", "先运行一次 codex 以生成配置", false, true, ""}},
                                        0, v.col == 1);
     return hbox({left, right}) | flex;
 }
@@ -825,8 +858,17 @@ struct Form {
     int tool = 0;       // 0 claude, 1 codex
     bool edit = false;
     std::string key;    // claude: original name, codex: provider id
-    std::string name, url, token;
+    std::string name, url, token, models, selected_model;
     int field = 0;
+    std::string error;
+};
+
+struct ModelPicker {
+    int tool = 0;
+    std::string key, name;
+    std::vector<ModelOption> models;
+    std::vector<std::string> labels;
+    int selected = 0;
     std::string error;
 };
 
@@ -855,14 +897,16 @@ private:
     UsageNav nav_;
     SwitchView view_;
     Form form_;
-    int mode_ = 0;  // 0 main, 1 form
+    ModelPicker picker_;
+    int mode_ = 0;  // 0 main, 1 form, 2 model picker
     std::string toast_;
     bool toast_err_ = false;
     int64_t toast_at_ = 0;
     int64_t reload_at_ = 0;
     std::string pending_delete_;
 
-    Component in_name_, in_url_, in_token_, form_container_, form_comp_, main_comp_, root_;
+    Component in_name_, in_url_, in_token_, in_model_, form_container_, form_comp_, main_comp_, root_;
+    Component model_menu_, model_comp_;
 
     // ---- state ----
     void reload() {
@@ -900,6 +944,7 @@ private:
                 else notify("✘ " + err, true);
             } else if (sel - 1 < static_cast<int>(st.profiles.size())) {
                 const auto& p = st.profiles[sel - 1];
+                if (p.models.size() > 1) { open_model_picker(); return; }
                 if (claude::apply(&p, err)) notify("✔ Claude Code → " + p.name + "（新会话生效）");
                 else notify("✘ " + err, true);
             } else {
@@ -912,10 +957,73 @@ private:
                 else notify("✘ " + err, true);
             } else if (sel - 1 < static_cast<int>(st.providers.size())) {
                 const auto& p = st.providers[sel - 1];
+                if (p.models.size() > 1) { open_model_picker(); return; }
                 if (codex::use(p.id, err)) notify("✔ Codex → " + p.name + "（新会话生效）");
                 else notify("✘ " + err, true);
             }
         }
+        reload();
+    }
+
+    void open_model_picker() {
+        const int index = view_.sel[view_.col] - 1;
+        picker_ = ModelPicker{};
+        picker_.tool = view_.col;
+        std::string selected;
+        if (view_.col == 0 && index >= 0 && index < static_cast<int>(view_.claude.profiles.size())) {
+            const auto& p = view_.claude.profiles[index];
+            picker_.key = picker_.name = p.name;
+            picker_.models = p.models;
+            selected = index == view_.claude.active_index ? view_.claude.active.model : p.model;
+        } else if (view_.col == 1 && index >= 0 && index < static_cast<int>(view_.codex.providers.size())) {
+            const auto& p = view_.codex.providers[index];
+            picker_.key = p.id;
+            picker_.name = p.name;
+            picker_.models = p.models;
+            selected = p.id == view_.codex.active_id ? view_.codex.active_model : p.model;
+        } else {
+            notify("请先选择一个已保存的中转", true);
+            return;
+        }
+        if (picker_.models.empty()) {
+            open_form(true);
+            form_.field = 3;
+            return;
+        }
+        for (size_t i = 0; i < picker_.models.size(); ++i) {
+            const auto& m = picker_.models[i];
+            picker_.labels.push_back(m.name == m.id ? m.id : m.name + " → " + m.id);
+            if (m.id == selected) picker_.selected = static_cast<int>(i);
+        }
+        mode_ = 2;
+    }
+
+    void submit_model() {
+        if (picker_.models.empty()) return;
+        const auto& option = picker_.models[picker_.selected];
+        std::string err;
+        if (picker_.tool == 0) {
+            auto profiles = claude::load().profiles;
+            const auto it = std::find_if(profiles.begin(), profiles.end(), [&](const claude::Profile& p) {
+                return p.name == picker_.key;
+            });
+            if (it == profiles.end() || std::find(it->models.begin(), it->models.end(), option) == it->models.end()) {
+                picker_.error = "中转或模型已改变，请关闭列表后重试";
+                return;
+            }
+            it->model = option.id;
+            if (!claude::save_profiles(profiles, err)) { picker_.error = err; return; }
+            if (!claude::apply(&*it, err)) {
+                picker_.error = "模型选择已保存，但切换失败: " + err;
+                return;
+            }
+        } else if (!codex::use(picker_.key, option.id, err)) {
+            picker_.error = err;
+            return;
+        }
+        notify("✔ " + std::string(tool_title(static_cast<Tool>(picker_.tool))) + " → " +
+               picker_.name + " · " + picker_.labels[picker_.selected] + "（新会话生效）");
+        mode_ = 0;
         reload();
     }
 
@@ -937,6 +1045,8 @@ private:
                 form_.name = p.name;
                 form_.url = p.base_url;
                 form_.token = p.token;
+                form_.models = format_models(p.models);
+                form_.selected_model = p.model;
             } else {
                 if (sel < 1 || sel - 1 >= static_cast<int>(view_.codex.providers.size())) {
                     notify("这一项不能编辑", true);
@@ -948,6 +1058,8 @@ private:
                 form_.name = p.name;
                 form_.url = p.base_url;
                 form_.token = p.token;
+                form_.models = format_models(p.models);
+                form_.selected_model = p.model;
             }
         }
         mode_ = 1;
@@ -966,10 +1078,17 @@ private:
             form_.error = "名称和 Base URL 不能为空";
             return;
         }
+        std::vector<ModelOption> models;
+        if (!parse_model_list(form_.models, models, err)) { form_.error = err; return; }
+        const bool keep_selection = std::any_of(models.begin(), models.end(), [&](const ModelOption& m) {
+            return m.id == form_.selected_model;
+        });
+        const std::string model = keep_selection ? form_.selected_model
+                                                : models.empty() ? "" : models.front().id;
 
         if (form_.tool == 0) {
             auto profiles = view_.claude.profiles;
-            claude::Profile np{name, url, token};
+            claude::Profile np{name, url, token, model, models};
             bool was_active = false;
             if (form_.edit) {
                 for (size_t i = 0; i < profiles.size(); ++i) {
@@ -991,13 +1110,21 @@ private:
                 form_.error = err;
                 return;
             }
-            if (was_active) claude::apply(&np, err);
+            form_.key = name;
+            if (was_active && !claude::apply(&np, err)) {
+                form_.edit = true;
+                form_.error = "配置已保存，但重新应用失败: " + err;
+                reload();
+                return;
+            }
             notify("✔ 已保存 " + name);
         } else {
             codex::Provider p;
             p.name = name;
             p.base_url = url;
             p.token = token;
+            p.model = model;
+            p.models = models;
             if (form_.edit) {
                 p.id = form_.key;
             } else {
@@ -1071,7 +1198,8 @@ private:
             if (!dup) break;
             unique = name + " " + std::to_string(n);
         }
-        profiles.push_back({unique, view_.claude.active.base_url, view_.claude.active.token});
+        profiles.push_back({unique, view_.claude.active.base_url, view_.claude.active.token,
+                            view_.claude.active.model, {}});
         std::string err;
         if (claude::save_profiles(profiles, err)) notify("✔ 已保存为 " + unique);
         else notify("✘ " + err, true);
@@ -1115,6 +1243,10 @@ private:
             field("名称", in_name_),
             field("Base URL", in_url_),
             field("Token", in_token_),
+            field("模型列表", in_model_),
+            text(" 多个用逗号分隔；支持直接 ID 或 名称=中转模型ID") | color(kDim),
+            text(" 例如 gpt-4o, sonnet=claude-3-5-sonnet-20241022；留空保留当前模型") | color(kDim),
+            text(" 模型列表和映射会同步到 CLI 的模型选择菜单") | color(kDim),
             text(""),
         };
         if (!form_.error.empty()) {
@@ -1129,6 +1261,19 @@ private:
         rows.push_back(hbox({key_hint("Enter", "下一项 / 保存"), key_hint("↑↓", "移动"),
                              key_hint("Esc", "取消")}));
         return vbox(std::move(rows)) | borderStyled(HEAVY, c) | size(WIDTH, EQUAL, 72);
+    }
+
+    Element model_picker_overlay() {
+        const Color c = picker_.tool == 0 ? kClaude : kCodex;
+        return vbox({
+            text(" 选择模型 · " + std::string(tool_title(static_cast<Tool>(picker_.tool))) +
+                 " · " + picker_.name) | bold | color(c),
+            separatorLight() | color(kDim),
+            model_menu_->Render() | vscroll_indicator | yframe | size(HEIGHT, LESS_THAN, 12),
+            text(picker_.error.empty() ? " 将切换到此中转，并应用所选模型；新会话生效"
+                                      : " ✘ " + picker_.error) | color(picker_.error.empty() ? kDim : kErr),
+            hbox({key_hint("↑↓", "选择"), key_hint("Enter", "切换"), key_hint("Esc", "取消")}),
+        }) | borderStyled(HEAVY, c) | size(WIDTH, EQUAL, 84);
     }
 
     std::shared_ptr<const Report> report() const { return worker_->snapshot().report; }
@@ -1304,6 +1449,7 @@ private:
         if (e == Event::Character('e')) { open_form(true); return true; }
         if (e == Event::Character('d')) { remove_selected(); return true; }
         if (e == Event::Character('i')) { import_external(); return true; }
+        if (e == Event::Character('m')) { open_model_picker(); return true; }
         pending_delete_.clear();
         return false;
     }
@@ -1312,7 +1458,8 @@ private:
         in_name_ = Input(&form_.name, "例如 anyrouter");
         in_url_ = Input(&form_.url, "https://example.com/v1");
         in_token_ = Input(&form_.token, "sk-…");
-        form_container_ = Container::Vertical({in_name_, in_url_, in_token_}, &form_.field);
+        in_model_ = Input(&form_.models, "gpt-4o, sonnet=claude-3-5-sonnet-20241022");
+        form_container_ = Container::Vertical({in_name_, in_url_, in_token_, in_model_}, &form_.field);
 
         form_comp_ = CatchEvent(form_container_, [this](Event e) {
             if (e == Event::Escape) {
@@ -1321,11 +1468,19 @@ private:
             }
             if (e == Event::Return) {
                 form_.error.clear();
-                if (form_.field >= 2) submit_form();
+                if (form_.field >= 3) submit_form();
                 else ++form_.field;
                 return true;
             }
             if (e.is_character()) form_.error.clear();
+            return false;
+        });
+
+        model_menu_ = Menu(&picker_.labels, &picker_.selected);
+        model_comp_ = CatchEvent(model_menu_, [this](Event e) {
+            if (e == Event::Escape) { mode_ = 0; reload(); return true; }
+            if (e == Event::Return) { submit_model(); return true; }
+            if (e == Event::ArrowUp || e == Event::ArrowDown) picker_.error.clear();
             return false;
         });
 
@@ -1334,7 +1489,7 @@ private:
         main_comp_ = CatchEvent(Renderer([](bool) { return emptyElement(); }),
                                 [this](Event e) { return on_main_event(e); });
 
-        auto tab = Container::Tab({main_comp_, form_comp_}, &mode_);
+        auto tab = Container::Tab({main_comp_, form_comp_, model_comp_}, &mode_);
         root_ = Renderer(tab, [this]() -> Element {
             const StatusView sv = status_view();
             const auto snap = worker_->snapshot();
@@ -1349,6 +1504,8 @@ private:
             if (mode_ == 1) {
                 // the form replaces the page body, so nothing bleeds through
                 body = vbox({filler(), hbox({filler(), form_overlay(), filler()}), filler()}) | flex;
+            } else if (mode_ == 2) {
+                body = vbox({filler(), hbox({filler(), model_picker_overlay(), filler()}), filler()}) | flex;
             }
             const int footer_mode = page_ == 0 ? 0 : (usage_.detail ? 2 : 1);
             return frame(page_, sv, std::move(body), toast_, toast_err_, Terminal::Size().dimx,

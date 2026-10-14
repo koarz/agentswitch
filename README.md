@@ -7,9 +7,10 @@
 ## 特性
 
 - **切换中转**
-  - Claude Code：改写 `~/.claude/settings.json` 的 `env.ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN`，其余设置原样保留。
-  - Codex：直接读取 `~/.codex/config.toml` 里的 `[model_providers.*]`，切换时只改顶层 `model_provider` 一行，注释和格式不动。
+  - Claude Code：改写 `~/.claude/settings.json` 的 `env.ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN`，配置了模型 ID 时同时写入 `env.ANTHROPIC_MODEL`。
+  - Codex：直接读取 `~/.codex/config.toml` 里的 `[model_providers.*]`，切换时改顶层 `model_provider`，配置了模型 ID 时同时写入顶层 `model`，其余注释和格式不动。
   - 支持添加、编辑、删除中转；写入前自动备份，原子替换。
+  - 每个中转可以保存多个自定义模型，支持直接使用中转模型名或配置 `名称=中转模型ID` 映射。
 - **用量统计**
   - 解析 Claude Code 和 Codex 的本地会话日志，只统计 token 总量，不区分中转站。
   - 全部 / Claude / Codex 三个标签，每个标签下有今日、本周、本月、总计四个周期。
@@ -41,7 +42,7 @@
 ┃     relay-c.example.org  ·  sk-de…dddd               ┃│     api.relay-b.example.com/v1  ·  sk-de…bbbb        │
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛╰──────────────────────────────────────────────────────╯
 
- ↑↓  选择   Enter  切换   Tab  换栏   a  添加   e  编辑   d  删除   i  导入当前   q  退出
+ ↑↓  选择   Enter  切换   Tab  换栏   a  添加   e  编辑   d  删除   m  选模型   i  导入当前   q  退出
 ```
 
 用量页（全部 / 本月）：
@@ -132,6 +133,7 @@ xmake install -y -o ~/.local     # 之后直接运行 agentswitch，需要 ~/.lo
 | 切换 | `↑` `↓` | 选择条目 |
 | 切换 | `Tab` / `←` `→` | 在 Claude 和 Codex 两栏之间移动 |
 | 切换 | `Enter` | 切换到选中的中转 |
+| 切换 | `m` | 选择中转的模型，并一起切换；多模型中转按 `Enter` 也会打开模型列表 |
 | 切换 | `a` / `e` / `d` | 添加 / 编辑 / 删除（删除需再按一次确认） |
 | 切换 | `i` | 把当前外部配置保存为一个条目（仅 Claude） |
 | 用量 | `Tab` / `Shift+Tab` | 切换 全部 / Claude / Codex |
@@ -143,6 +145,26 @@ xmake install -y -o ~/.local     # 之后直接运行 agentswitch，需要 ~/.lo
 | 每日用量 | `Esc` | 返回 |
 
 鼠标可以点击标签、周期卡片和模型行，滚轮用来滚动。
+
+添加（`a`）或编辑（`e`）中转时，在「模型列表」中填写多个模型，用英文或中文逗号分隔。每项既可以直接使用中转站的完整模型 ID，也可以配置 `名称=中转模型ID` 映射，例如：
+
+```text
+Codex:       gpt-4o, fast=gpt-4o-mini, legacy=gateway/gpt-4.1
+Claude Code: sonnet=claude-3-5-sonnet-20241022, opus=claude-3-opus-20240229, relay-custom-model
+```
+
+映射名称用于 AgentSwitch 和 CLI 的模型选择列表，应用时使用等号右侧的实际模型 ID。这里不依赖 CLI 的内置模型列表，也不要求模型在 models.dev 中有价格。中转站仍需支持对应 CLI 使用的 API 协议。
+
+- **Claude Code**：`sonnet`、`opus`、`haiku`、`fable` 映射会写入 `ANTHROPIC_DEFAULT_*_MODEL`，进入 CLI 后执行 `/model sonnet` 等命令也会使用映射目标。完整的 Anthropic 模型名映射通过 `modelOverrides` 应用。所有配置的模型会写入 `modelPicker`，可以在 `/model` 菜单中选择直接模型 ID 或自定义名称；任意自定义显示名称不等同于可用于命令参数的新别名。
+- **Codex**：为当前中转生成 `model_catalog_json` 目录，CLI 的 `/model` 菜单显示自定义名称，选中时使用真实模型 ID。Codex 的 `--model` 参数仍需填写真实模型 ID。生成目录优先保留已有目录或缓存中对应模型的元数据；没有匹配元数据的旧模型使用保守配置（8K 上下文、无推理等级、标准 Responses 协议），可在生成的 JSON 中调整。
+
+切换中转会同步更新 CLI 内部的列表和映射。切换到未配置模型的中转或官方默认时，会恢复原有的列表和映射；应用后由外部手动修改的字段会保留。Claude 的自定义 `/model` 列表需要 CLI v2.1.242 或更新版本。上述机制遵循 [Claude Code 的模型设置](https://code.claude.com/docs/en/model-config#environment-variables)、[自定义模型列表](https://code.claude.com/docs/en/settings-reference#modelpicker)和 [Codex 的自定义模型目录](https://learn.chatgpt.com/docs/enterprise/roll-out-a-gateway#use-a-model-catalog-for-custom-names)。
+
+多模型中转按 `Enter` 时会先打开模型列表，用 `↑↓` 选择、`Enter` 确认、`Esc` 取消；也可以按 `m` 直接选择模型。选好后一起切换中转和模型，新会话生效。首次默认选择第一个模型，之后记住所选模型。编辑模型列表会保留仍在列表中的已选模型；移除所选模型时改用第一个剩余模型。
+
+模型列表留空时保留当前模型；之前的单模型配置会兼容读取。切回「官方登录」或「OpenAI 默认」只移除中转覆盖，同样保留当前模型。列表会显示所选模型和模型数量，Claude 的「导入当前」也会保存当前模型 ID。
+
+模型设置使用 [Claude Code 官方文档](https://code.claude.com/docs/en/model-config#setting-your-model)中的 `ANTHROPIC_MODEL` 和 [Codex 官方配置参考](https://learn.chatgpt.com/docs/config-file/config-reference)中的 `model` 字段。
 
 也可以不进 TUI：
 
@@ -159,8 +181,8 @@ agentswitch snapshot usage 120x40 0 2    # 把页面渲染成文本（调试用�
 
 | 工具 | 中转列表来源 | 切换时改动 |
 |---|---|---|
-| Claude Code | `~/.config/agentswitch/profiles.json` | `~/.claude/settings.json` 的 `env.ANTHROPIC_BASE_URL`、`env.ANTHROPIC_AUTH_TOKEN` |
-| Codex | `~/.codex/config.toml` 的 `[model_providers.*]` | 顶层 `model_provider` |
+| Claude Code | `~/.config/agentswitch/profiles.json` | `~/.claude/settings.json` 的 `env.ANTHROPIC_BASE_URL`、`env.ANTHROPIC_AUTH_TOKEN`，以及配置了模型 ID 时的 `env.ANTHROPIC_MODEL` |
+| Codex | `~/.codex/config.toml` 的 `[model_providers.*]`；模型绑定来自 `profiles.json` 的 `codex_models` | 顶层 `model_provider`，以及配置了模型 ID 时的顶层 `model` |
 
 选择「官方登录」（Claude）或「OpenAI 默认」（Codex）会移除覆盖。每次改写前会在原文件旁边保存一份 `*.agentswitch.bak`。已经运行中的会话不受影响，新会话才会使用新的中转。
 
@@ -176,7 +198,8 @@ agentswitch snapshot usage 120x40 0 2    # 把页面渲染成文本（调试用�
 | 路径 | 内容 |
 |---|---|
 | `~/.local/share/agentswitch/usage.duckdb` | 用量事件、价格缓存、文件游标 |
-| `~/.config/agentswitch/profiles.json` | Claude 中转列表（明文，权限 0600） |
+| `~/.config/agentswitch/profiles.json` | Claude 中转列表及其模型、Codex 中转的模型绑定（明文，权限 0600） |
+| `~/.config/agentswitch/codex-models/*.json` | 当前及历史中转的 Codex 模型目录；保留旧版本供配置备份恢复 |
 
 遵循 `XDG_DATA_HOME`、`XDG_CONFIG_HOME`、`CLAUDE_CONFIG_DIR` 和 `CODEX_HOME`。
 
@@ -205,6 +228,13 @@ agentswitch snapshot usage 120x40 0 2    # 把页面渲染成文本（调试用�
 | `src/pricing.cpp` | models.dev 价格拉取与模型名匹配 |
 | `src/report.cpp` | 按周期汇总并计价 |
 | `src/worker.cpp` | 后台线程：刷新价格、扫描日志、生成报告 |
+
+配置切换的回归测试使用独立临时目录，不读取或修改实际的 Claude / Codex 配置：
+
+```bash
+xmake switcher_test
+xmake run switcher_test
+```
 
 ## 许可证
 
